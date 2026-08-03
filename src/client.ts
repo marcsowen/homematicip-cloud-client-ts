@@ -228,7 +228,8 @@ export class HmIPClient {
     const state = parseHmIPState(result.body);
     if (!state.success) {
       if (result.body !== false) {
-        this.log.error('Homematic IP returned an invalid home state response: %s.', state.error);
+        this.log.error('Homematic IP returned an invalid home state response: %s.%s',
+          state.error, state.diagnostic ? ` Redacted diagnostic: ${state.diagnostic}` : '');
       }
       return false;
     }
@@ -266,7 +267,9 @@ export class HmIPClient {
       }
       const parseResult = parseHmIPStateChange(parsedMessage);
       if (!parseResult.success) {
-        this.log.error('Ignoring malformed Homematic IP websocket message: %s', parseResult.error);
+        this.log.error('Ignoring malformed Homematic IP websocket message: %s.%s',
+          parseResult.error,
+          parseResult.diagnostic ? ` Redacted diagnostic: ${parseResult.diagnostic}` : '');
         return;
       }
       listener(parseResult.value);

@@ -1,6 +1,6 @@
 {
   "name": "homematicip-cloud-client-ts",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Unofficial TypeScript and JavaScript client for the Homematic IP Cloud REST and WebSocket APIs",
   "license": "Apache-2.0",
   "author": "Marc Sowen <marc@sowen.net>",

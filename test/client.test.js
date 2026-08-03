@@ -34,8 +34,8 @@ test('shares and caches endpoint initialization', async () => {
   client.shutdown();
 });
 
-test('validates endpoints and current-state responses', async () => {
-  const {log} = createLog();
+test('validates endpoints and logs redacted current-state diagnostics', async () => {
+  const {errors, log} = createLog();
   const invalidEndpoints = new HmIPClient(log, {accessPoint: '3014-1234'}, {
     fetch: async () => new Response(JSON.stringify({
       urlREST: 'ftp://rest.example',
@@ -49,7 +49,18 @@ test('validates endpoints and current-state responses', async () => {
   const invalidState = new HmIPClient(log, {accessPoint: '3014-1234', authToken: 'token'}, {
     fetch: async () => {
       requests += 1;
-      const body = requests === 1 ? endpoints : {devices: {}, groups: {}, home: {}};
+      const body = requests === 1 ? endpoints : {
+        devices: {broken: {
+          id: 'private-device-id',
+          type: 'PLUGIN_EXTERNAL',
+          label: 'Private room',
+          authToken: 'auth-secret',
+          homeId: 'private-home-id',
+          functionalChannels: null,
+        }},
+        groups: {},
+        home: {id: 'home1', currentAPVersion: '1.0.0', functionalHomes: {}},
+      };
       return new Response(JSON.stringify(body), {
         headers: {'content-type': 'application/json'},
         status: 200,
@@ -58,6 +69,12 @@ test('validates endpoints and current-state responses', async () => {
   });
   assert.equal(await invalidState.init(), true);
   assert.equal(await invalidState.getCurrentState(), false);
+  const diagnosticLog = errors.at(-1).join(' ');
+  assert.match(diagnosticLog, /functionalChannels must be an object/);
+  assert.match(diagnosticLog, /Redacted diagnostic/);
+  for (const secret of ['private-device-id', 'Private room', 'auth-secret', 'private-home-id']) {
+    assert.doesNotMatch(diagnosticLog, new RegExp(secret));
+  }
   invalidState.shutdown();
 });
 

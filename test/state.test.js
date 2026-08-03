@@ -36,12 +36,74 @@ test('validates the minimum usable Homematic IP state shape', () => {
   assert.equal(isHmIPState({...state, home: {}}), false);
 });
 
+test('accepts and normalizes HCU plugin devices', () => {
+  const pluginDevice = {
+    id: '690e2e9f-1111-2222-3333-444444444444',
+    type: 'PLUGIN_EXTERNAL',
+    homeId: 'home1',
+    lastStatusUpdate: 1765536007619,
+    label: 'External shutter',
+    functionalChannels: {
+      0: {functionalChannelType: 'EXTERNAL_BASE_CHANNEL'},
+      1: {functionalChannelType: 'GENERIC_WINDOW_COVERING_CHANNEL'},
+    },
+  };
+  const result = parseHmIPState({...state, devices: {plugin: pluginDevice}});
+  assert.equal(result.success, true);
+  if (!result.success) {
+    assert.fail(result.error);
+  }
+  assert.deepEqual(result.value.devices.plugin, {
+    ...pluginDevice,
+    modelType: 'PLUGIN_EXTERNAL',
+    firmwareVersion: '',
+    permanentlyReachable: false,
+  });
+});
+
 test('reports the state entry that failed validation', () => {
   assert.deepEqual(parseHmIPState({
     devices: {brokenDevice: {id: 'brokenDevice'}},
     groups: {},
     home: state.home,
-  }), {success: false, error: 'device brokenDevice is invalid'});
+  }), {
+    success: false,
+    error: 'device at key [REDACTED] is invalid: type must be a string',
+    diagnostic: '{"id":"[REDACTED]"}',
+  });
+});
+
+test('redacts sensitive values from validation diagnostics', () => {
+  const result = parseHmIPState({
+    devices: {
+      secretDevice: {
+        id: '690e2e9f-1111-2222-3333-444444444444',
+        type: 'PLUGIN_EXTERNAL',
+        label: 'Private room',
+        authToken: 'auth-secret',
+        authorizationPin: '1234',
+        homeId: 'private-home-id',
+        functionalChannels: null,
+      },
+    },
+    groups: {},
+    home: state.home,
+  });
+  assert.equal(result.success, false);
+  if (result.success) {
+    assert.fail('Expected validation to fail');
+  }
+  assert.match(result.error, /functionalChannels must be an object/);
+  assert.match(result.diagnostic, /PLUGIN_EXTERNAL/);
+  for (const secret of [
+    '690e2e9f-1111-2222-3333-444444444444',
+    'Private room',
+    'auth-secret',
+    '1234',
+    'private-home-id',
+  ]) {
+    assert.doesNotMatch(result.diagnostic, new RegExp(secret));
+  }
 });
 
 test('validates and normalizes websocket event envelopes', () => {
@@ -70,6 +132,7 @@ test('reports the event that failed websocket validation', () => {
     brokenDevice: {pushEventType: 'DEVICE_ADDED', device: {id: 'incomplete'}},
   }}), {
     success: false,
-    error: 'event brokenDevice: DEVICE_ADDED.device is invalid',
+    error: 'event at key [REDACTED]: DEVICE_ADDED.device is invalid: type must be a string',
+    diagnostic: '{"id":"[REDACTED]"}',
   });
 });

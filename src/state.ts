@@ -27,7 +27,7 @@ export interface HmIPFunctionalChannel {
 export interface HmIPDevice extends IdentifiableDevice {
   label: string;
   type: string;
-  /** Not supplied for devices with the EXTERNAL archetype. */
+  /** Not supplied for devices with the EXTERNAL or PLUGIN_EXTERNAL archetype. */
   oem?: string;
   modelType: string;
   firmwareVersion: string;
@@ -99,7 +99,75 @@ export enum MotionDetectionSendInterval {
 
 export type HmIPParseResult<T> =
   | {success: true; value: T}
-  | {success: false; error: string};
+  | {success: false; error: string; diagnostic?: string};
+
+const REDACTED_VALUE = '[REDACTED]';
+const MAX_DIAGNOSTIC_LENGTH = 4000;
+const sensitiveDiagnosticKeys = new Set([
+  'accesspoint',
+  'accesspointid',
+  'authorization',
+  'authtoken',
+  'clientauth',
+  'clientauthtoken',
+  'deviceid',
+  'groupid',
+  'groups',
+  'homeid',
+  'id',
+  'label',
+  'password',
+  'pin',
+  'secret',
+  'serializedglobaltradeitemnumber',
+  'sgtin',
+  'token',
+]);
+
+function normalizeDiagnosticKey(key: string): string {
+  return key.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+}
+
+function isSensitiveDiagnosticKey(key: string): boolean {
+  const normalized = normalizeDiagnosticKey(key);
+  return sensitiveDiagnosticKeys.has(normalized)
+    || normalized.endsWith('authtoken')
+    || normalized.endsWith('authorizationpin')
+    || normalized.endsWith('password')
+    || normalized.endsWith('secret');
+}
+
+function redactDiagnosticValue(value: unknown, seen: WeakSet<object>): unknown {
+  if (Array.isArray(value)) {
+    return value.map(item => redactDiagnosticValue(item, seen));
+  }
+  if (!isHmIPRecord(value)) {
+    return value;
+  }
+  if (seen.has(value)) {
+    return '[CIRCULAR]';
+  }
+  seen.add(value);
+  const redacted: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    redacted[key] = isSensitiveDiagnosticKey(key)
+      ? REDACTED_VALUE
+      : redactDiagnosticValue(entry, seen);
+  }
+  return redacted;
+}
+
+export function formatHmIPDiagnostic(value: unknown): string {
+  let diagnostic: string;
+  try {
+    diagnostic = JSON.stringify(redactDiagnosticValue(value, new WeakSet())) ?? String(value);
+  } catch {
+    diagnostic = '[UNSERIALIZABLE]';
+  }
+  return diagnostic.length <= MAX_DIAGNOSTIC_LENGTH
+    ? diagnostic
+    : `${diagnostic.slice(0, MAX_DIAGNOSTIC_LENGTH)}...[TRUNCATED]`;
+}
 
 export function isHmIPRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -116,34 +184,116 @@ export function hasFunctionalChannelType<const T extends readonly string[]>(
   return types.includes(channel.functionalChannelType);
 }
 
+function isHmIPExternalDevice(value: Record<string, unknown>): boolean {
+  return value.type === 'EXTERNAL'
+    || value.type === 'PLUGIN_EXTERNAL'
+    || value.deviceArchetype === 'EXTERNAL'
+    || value.deviceArchetype === 'PLUGIN_EXTERNAL';
+}
+
+function getHmIPDeviceValidationError(value: unknown): string | undefined {
+  if (!isHmIPRecord(value)) {
+    return 'device must be an object';
+  }
+  const requiredStrings = ['id', 'type', 'label', 'homeId'] as const;
+  for (const field of requiredStrings) {
+    if (typeof value[field] !== 'string') {
+      return `${field} must be a string`;
+    }
+  }
+  if (!isHmIPRecord(value.functionalChannels)) {
+    return 'functionalChannels must be an object';
+  }
+  for (const [index, channel] of Object.entries(value.functionalChannels)) {
+    if (!isHmIPFunctionalChannel(channel)) {
+      return `functionalChannels.${index}.functionalChannelType must be a string`;
+    }
+  }
+  if (isHmIPExternalDevice(value)) {
+    return undefined;
+  }
+  if (typeof value.oem !== 'string') {
+    return 'oem must be a string';
+  }
+  if (typeof value.modelType !== 'string') {
+    return 'modelType must be a string';
+  }
+  if (typeof value.firmwareVersion !== 'string') {
+    return 'firmwareVersion must be a string';
+  }
+  if (typeof value.permanentlyReachable !== 'boolean') {
+    return 'permanentlyReachable must be a boolean';
+  }
+  if (typeof value.lastStatusUpdate !== 'number') {
+    return 'lastStatusUpdate must be a number';
+  }
+  return undefined;
+}
+
+function normalizeHmIPDevice(value: Record<string, unknown>): HmIPDevice {
+  if (!isHmIPExternalDevice(value)) {
+    return value as unknown as HmIPDevice;
+  }
+  return {
+    ...value,
+    id: value.id as string,
+    type: value.type as string,
+    label: value.label as string,
+    homeId: value.homeId as string,
+    modelType: typeof value.modelType === 'string' ? value.modelType : value.type as string,
+    firmwareVersion: typeof value.firmwareVersion === 'string' ? value.firmwareVersion : '',
+    permanentlyReachable: typeof value.permanentlyReachable === 'boolean' ? value.permanentlyReachable : false,
+    lastStatusUpdate: typeof value.lastStatusUpdate === 'number' ? value.lastStatusUpdate : 0,
+    functionalChannels: value.functionalChannels as Record<string, HmIPFunctionalChannel>,
+  };
+}
+
 export function isHmIPDevice(value: unknown): value is HmIPDevice {
-  return isHmIPRecord(value)
-    && typeof value.id === 'string'
-    && typeof value.type === 'string'
-    && typeof value.label === 'string'
-    && (value.type === 'EXTERNAL' || typeof value.oem === 'string')
-    && typeof value.modelType === 'string'
-    && typeof value.firmwareVersion === 'string'
-    && typeof value.permanentlyReachable === 'boolean'
-    && typeof value.lastStatusUpdate === 'number'
-    && typeof value.homeId === 'string'
-    && isHmIPRecord(value.functionalChannels)
-    && Object.values(value.functionalChannels).every(isHmIPFunctionalChannel);
+  return getHmIPDeviceValidationError(value) === undefined;
 }
 
 export function isHmIPHome(value: unknown): value is HmIPHome {
-  return isHmIPRecord(value)
-    && typeof value.id === 'string'
-    && typeof value.currentAPVersion === 'string'
-    && isHmIPRecord(value.functionalHomes)
-    && Object.values(value.functionalHomes).every(functionalHome =>
-      isHmIPRecord(functionalHome)
-      && typeof functionalHome.solution === 'string'
-      && typeof functionalHome.active === 'boolean');
+  return getHmIPHomeValidationError(value) === undefined;
 }
 
-function isHmIPGroup(value: unknown): value is HmIPGroup {
-  return isHmIPRecord(value) && typeof value.id === 'string' && typeof value.type === 'string';
+function getHmIPHomeValidationError(value: unknown): string | undefined {
+  if (!isHmIPRecord(value)) {
+    return 'home must be an object';
+  }
+  if (typeof value.id !== 'string') {
+    return 'id must be a string';
+  }
+  if (typeof value.currentAPVersion !== 'string') {
+    return 'currentAPVersion must be a string';
+  }
+  if (!isHmIPRecord(value.functionalHomes)) {
+    return 'functionalHomes must be an object';
+  }
+  for (const [solution, functionalHome] of Object.entries(value.functionalHomes)) {
+    if (!isHmIPRecord(functionalHome)) {
+      return `functionalHomes.${solution} must be an object`;
+    }
+    if (typeof functionalHome.solution !== 'string') {
+      return `functionalHomes.${solution}.solution must be a string`;
+    }
+    if (typeof functionalHome.active !== 'boolean') {
+      return `functionalHomes.${solution}.active must be a boolean`;
+    }
+  }
+  return undefined;
+}
+
+function getHmIPGroupValidationError(value: unknown): string | undefined {
+  if (!isHmIPRecord(value)) {
+    return 'group must be an object';
+  }
+  if (typeof value.id !== 'string') {
+    return 'id must be a string';
+  }
+  if (typeof value.type !== 'string') {
+    return 'type must be a string';
+  }
+  return undefined;
 }
 
 export function isHmIPHeatingGroup(value: HmIPGroup): value is HmIPHeatingGroup {
@@ -192,23 +342,40 @@ export function parseHmIPState(value: unknown): HmIPParseResult<HmIPState> {
     return {success: false, error: 'response must contain devices, groups, and home objects'};
   }
 
-  if (!isHmIPHome(value.home)) {
-    return {success: false, error: 'home is invalid'};
+  const homeError = getHmIPHomeValidationError(value.home);
+  if (homeError) {
+    return {
+      success: false,
+      error: `home is invalid: ${homeError}`,
+      diagnostic: formatHmIPDiagnostic(value.home),
+    };
   }
 
+  const devices: Record<string, HmIPDevice> = {};
   for (const [id, device] of Object.entries(value.devices)) {
-    if (!isHmIPDevice(device)) {
-      return {success: false, error: `device ${id} is invalid`};
+    const error = getHmIPDeviceValidationError(device);
+    if (error) {
+      return {
+        success: false,
+        error: `device at key [REDACTED] is invalid: ${error}`,
+        diagnostic: formatHmIPDiagnostic(device),
+      };
+    }
+    devices[id] = normalizeHmIPDevice(device as Record<string, unknown>);
+  }
+
+  for (const group of Object.values(value.groups)) {
+    const error = getHmIPGroupValidationError(group);
+    if (error) {
+      return {
+        success: false,
+        error: `group at key [REDACTED] is invalid: ${error}`,
+        diagnostic: formatHmIPDiagnostic(group),
+      };
     }
   }
 
-  for (const [id, group] of Object.entries(value.groups)) {
-    if (!isHmIPGroup(group)) {
-      return {success: false, error: `group ${id} is invalid`};
-    }
-  }
-
-  return {success: true, value: value as unknown as HmIPState};
+  return {success: true, value: {...value, devices} as unknown as HmIPState};
 }
 
 export function parseHmIPStateChange(value: unknown): HmIPParseResult<HmIPStateChange> {
@@ -219,41 +386,70 @@ export function parseHmIPStateChange(value: unknown): HmIPParseResult<HmIPStateC
   const events: Record<string, HmIPStateChangeEvent> = {};
   for (const [id, candidate] of Object.entries(value.events)) {
     if (!isHmIPRecord(candidate) || typeof candidate.pushEventType !== 'string') {
-      return {success: false, error: `event ${id}: pushEventType must be a string`};
+      return {
+        success: false,
+        error: 'event at key [REDACTED]: pushEventType must be a string',
+        diagnostic: formatHmIPDiagnostic(candidate),
+      };
     }
 
     switch (candidate.pushEventType) {
       case 'GROUP_CHANGED':
       case 'GROUP_ADDED':
       case 'GROUP_REMOVED':
-        if (!isHmIPGroup(candidate.group)) {
-          return {success: false, error: `event ${id}: ${candidate.pushEventType}.group is invalid`};
+        {
+          const error = getHmIPGroupValidationError(candidate.group);
+          if (error) {
+            return {
+              success: false,
+              error: `event at key [REDACTED]: ${candidate.pushEventType}.group is invalid: ${error}`,
+              diagnostic: formatHmIPDiagnostic(candidate.group),
+            };
+          }
         }
-        events[id] = {pushEventType: candidate.pushEventType, group: candidate.group};
+        events[id] = {pushEventType: candidate.pushEventType, group: candidate.group as HmIPGroup};
         break;
       case 'DEVICE_ADDED':
       case 'DEVICE_CHANGED':
-        if (!isHmIPDevice(candidate.device)) {
-          return {success: false, error: `event ${id}: ${candidate.pushEventType}.device is invalid`};
+        {
+          const error = getHmIPDeviceValidationError(candidate.device);
+          if (error) {
+            return {
+              success: false,
+              error: `event at key [REDACTED]: ${candidate.pushEventType}.device is invalid: ${error}`,
+              diagnostic: formatHmIPDiagnostic(candidate.device),
+            };
+          }
+          events[id] = {
+            pushEventType: candidate.pushEventType,
+            device: normalizeHmIPDevice(candidate.device as Record<string, unknown>),
+          };
         }
-        events[id] = {pushEventType: candidate.pushEventType, device: candidate.device};
         break;
       case 'DEVICE_REMOVED':
         if (!isHmIPRecord(candidate.device)
           || typeof candidate.device.id !== 'string'
-          || typeof candidate.device.modelType !== 'string') {
-          return {success: false, error: `event ${id}: DEVICE_REMOVED.device is invalid`};
+          || (candidate.device.modelType != null && typeof candidate.device.modelType !== 'string')) {
+          return {
+            success: false,
+            error: 'event at key [REDACTED]: DEVICE_REMOVED.device is invalid',
+            diagnostic: formatHmIPDiagnostic(candidate.device),
+          };
         }
         events[id] = {
           pushEventType: candidate.pushEventType,
-          device: {id: candidate.device.id, modelType: candidate.device.modelType},
+          device: {id: candidate.device.id, modelType: candidate.device.modelType ?? ''},
         };
         break;
       case 'DEVICE_CHANNEL_EVENT':
         if (typeof candidate.deviceId !== 'string'
           || (candidate.channelIndex != null && typeof candidate.channelIndex !== 'number')
           || (candidate.channelEventType != null && typeof candidate.channelEventType !== 'string')) {
-          return {success: false, error: `event ${id}: DEVICE_CHANNEL_EVENT fields are invalid`};
+          return {
+            success: false,
+            error: 'event at key [REDACTED]: DEVICE_CHANNEL_EVENT fields are invalid',
+            diagnostic: formatHmIPDiagnostic(candidate),
+          };
         }
         events[id] = {
           pushEventType: candidate.pushEventType,
@@ -263,10 +459,17 @@ export function parseHmIPStateChange(value: unknown): HmIPParseResult<HmIPStateC
         };
         break;
       case 'HOME_CHANGED':
-        if (!isHmIPHome(candidate.home)) {
-          return {success: false, error: `event ${id}: HOME_CHANGED.home is invalid`};
+        {
+          const error = getHmIPHomeValidationError(candidate.home);
+          if (error) {
+            return {
+              success: false,
+              error: `event at key [REDACTED]: HOME_CHANGED.home is invalid: ${error}`,
+              diagnostic: formatHmIPDiagnostic(candidate.home),
+            };
+          }
         }
-        events[id] = {pushEventType: candidate.pushEventType, home: candidate.home};
+        events[id] = {pushEventType: candidate.pushEventType, home: candidate.home as HmIPHome};
         break;
       case 'SECURITY_JOURNAL_CHANGED':
         events[id] = {pushEventType: candidate.pushEventType, data: candidate};

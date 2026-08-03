@@ -5,7 +5,8 @@
 [![GitHub last commit](https://img.shields.io/github/last-commit/marcsowen/homematicip-cloud-client-ts.svg?style=plastic)](https://github.com/marcsowen/homematicip-cloud-client-ts)
 ![GitHub build](https://img.shields.io/github/actions/workflow/status/marcsowen/homematicip-cloud-client-ts/main.yml?style=plastic)
 
-Unofficial TypeScript and JavaScript client for the Homematic IP Cloud REST and WebSocket APIs used by the Homematic IP Access Point.
+Unofficial TypeScript and JavaScript client for the Homematic IP Cloud REST and WebSocket APIs used by the Homematic IP
+Access Point and Home Control Unit.
 
 > This project is not affiliated with or endorsed by eQ-3 AG. The cloud API is unofficial and may change without notice.
 
@@ -43,6 +44,13 @@ process.once('SIGTERM', () => client.shutdown());
 
 The package includes strict TypeScript definitions and runtime validation for complete home-state responses and WebSocket change events.
 
+### Validation diagnostics
+
+Invalid home-state and WebSocket payloads are logged with the failing field and a diagnostic snapshot of only the
+rejected object. Diagnostics are limited to 4,000 characters and redact credentials, PINs, controller and device
+identifiers, serialized trade numbers, groups, and user-defined labels. Review diagnostic output before sharing it in a
+public issue because the unofficial API may add fields that the client does not know are sensitive yet.
+
 ## Authentication
 
 Pairing is deliberately exposed as individual operations so applications can provide their own UI and cancellation behaviour:
@@ -58,6 +66,9 @@ The link button on the Homematic IP Access Point must be pressed while pairing. 
 
 The client supports the HmIP-HCU1 through the same cloud API. The HCU requires its Access Point ID on REST and WebSocket
 connections. This is handled automatically.
+
+HCU devices with the `PLUGIN_EXTERNAL` archetype are accepted and normalized so an application can either support or
+deliberately ignore them without rejecting the complete home state.
 
 When pairing an HCU, press the button on top of the unit before calling `authConnectionRequest()`. The HCU then allows
 five minutes to complete registration. The remaining pairing operations are the same as for an HmIP-HAP.
