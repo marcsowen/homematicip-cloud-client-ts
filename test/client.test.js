@@ -63,6 +63,7 @@ test('validates endpoints and current-state responses', async () => {
 
 test('connect emits typed events and ignores malformed messages', async () => {
   const {errors, log} = createLog();
+  let socketOptions;
   class FakeWebSocket extends EventEmitter {
     close() {}
     ping() {}
@@ -73,12 +74,16 @@ test('connect emits typed events and ignores malformed messages', async () => {
       headers: {'content-type': 'application/json'},
       status: 200,
     }),
-    webSocket: {createWebSocket: () => socket},
+    webSocket: {createWebSocket: (_url, options) => {
+      socketOptions = options;
+      return socket;
+    }},
   });
   assert.equal(await client.init(), true);
 
   const changes = [];
   client.connect(change => changes.push(change));
+  assert.equal(socketOptions.headers['ACCESSPOINT-ID'], '30141234');
   socket.emit('message', Buffer.from('{invalid'));
   socket.emit('message', Buffer.from(JSON.stringify({events: {
     event1: {pushEventType: 'DEVICE_CHANNEL_EVENT', deviceId: 'button1'},
@@ -87,6 +92,43 @@ test('connect emits typed events and ignores malformed messages', async () => {
   assert.equal(errors.length, 1);
   assert.equal(changes.length, 1);
   assert.equal(changes[0].events.event1.deviceId, 'button1');
+  client.shutdown();
+});
+
+test('includes the Access Point ID required for HCU pairing', async () => {
+  const {log} = createLog();
+  const requests = [];
+  const responses = [
+    new Response(JSON.stringify(true), {headers: {'content-type': 'application/json'}, status: 200}),
+    new Response(JSON.stringify(true), {headers: {'content-type': 'application/json'}, status: 200}),
+  ];
+  const client = new HmIPClient(log, {accessPoint: '3014-1234'}, {
+    fetch: async (url, options) => {
+      if (url === 'https://lookup.homematic.com:48335/getHost') {
+        return new Response(JSON.stringify(endpoints), {
+          headers: {'content-type': 'application/json'},
+          status: 200,
+        });
+      }
+      requests.push({options, url});
+      return responses.shift();
+    },
+  });
+  assert.equal(await client.init(), true);
+
+  assert.equal(await client.authConnectionRequest('client-id'), true);
+  assert.deepEqual(await client.authRequestAcknowledged('client-id'), {status: 'acknowledged'});
+
+  assert.equal(requests[0].options.headers['ACCESSPOINT-ID'], '30141234');
+  assert.deepEqual(JSON.parse(requests[0].options.body), {
+    deviceId: 'client-id',
+    deviceName: 'homematicip-cloud-client-ts',
+    sgtin: '30141234',
+  });
+  assert.deepEqual(JSON.parse(requests[1].options.body), {
+    deviceId: 'client-id',
+    accessPointId: '30141234',
+  });
   client.shutdown();
 });
 

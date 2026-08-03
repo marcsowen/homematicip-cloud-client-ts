@@ -18,6 +18,7 @@ export interface HmIPHttpRequestOptions {
 }
 
 export interface HmIPHttpCredentials {
+  accessPointId: string;
   authToken: string;
   clientAuthToken: string;
   pin: string;
@@ -103,6 +104,7 @@ export class HmIPHttpClient {
       'accept': 'application/json',
       'VERSION': '12',
       'CLIENTAUTH': this.credentials.clientAuthToken,
+      'ACCESSPOINT-ID': this.credentials.accessPointId,
     };
     if (this.credentials.pin) {
       headers.PIN = this.credentials.pin;

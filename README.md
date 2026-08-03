@@ -54,6 +54,14 @@ Pairing is deliberately exposed as individual operations so applications can pro
 
 The link button on the Homematic IP Access Point must be pressed while pairing. Store the returned authentication token securely.
 
+### Home Control Unit (HmIP-HCU1)
+
+The client supports the HmIP-HCU1 through the same cloud API. The HCU requires its Access Point ID on REST and WebSocket
+connections. This is handled automatically.
+
+When pairing an HCU, press the button on top of the unit before calling `authConnectionRequest()`. The HCU then allows
+five minutes to complete registration. The remaining pairing operations are the same as for an HmIP-HAP.
+
 ## License
 
 Apache-2.0

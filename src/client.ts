@@ -151,6 +151,7 @@ export class HmIPClient {
             this.log,
             endpoints.rest,
             {
+              accessPointId: this.accessPoint,
               authToken: this.authToken,
               clientAuthToken: this.clientAuthToken,
               pin: this.pin,
@@ -249,6 +250,7 @@ export class HmIPClient {
         {
           'AUTHTOKEN': this.authToken,
           'CLIENTAUTH': this.clientAuthToken,
+          'ACCESSPOINT-ID': this.accessPoint,
         },
         this.webSocketOptions,
       );
@@ -298,6 +300,7 @@ export class HmIPClient {
   ): Promise<HmIPPairingAcknowledgement> {
     const request = {
       'deviceId': deviceId,
+      'accessPointId': this.accessPoint,
     };
     const result = await this.request(false, false, 'auth/isRequestAcknowledged', request, 0, signal);
     if (result.ok) {

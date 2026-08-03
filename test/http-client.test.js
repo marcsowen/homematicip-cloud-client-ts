@@ -3,7 +3,12 @@ import test from 'node:test';
 import {HmIPHttpClient} from '../dist/http-client.js';
 
 const log = {debug() {}, error() {}, info() {}, warn() {}};
-const credentials = {authToken: 'auth-token', clientAuthToken: 'client-token', pin: '1234'};
+const credentials = {
+  accessPointId: '30141234',
+  authToken: 'auth-token',
+  clientAuthToken: 'client-token',
+  pin: '1234',
+};
 
 test('sends authenticated JSON requests', async () => {
   const requests = [];
@@ -25,6 +30,7 @@ test('sends authenticated JSON requests', async () => {
   assert.equal(requests[0].url, 'https://rest.example/hmip/device/control');
   assert.equal(requests[0].options.headers.AUTHTOKEN, 'auth-token');
   assert.equal(requests[0].options.headers.CLIENTAUTH, 'client-token');
+  assert.equal(requests[0].options.headers['ACCESSPOINT-ID'], '30141234');
   assert.equal(requests[0].options.headers.PIN, '1234');
   assert.equal(requests[0].options.body, JSON.stringify({on: true}));
   assert.equal('AUTHTOKEN' in requests[1].options.headers, false);
