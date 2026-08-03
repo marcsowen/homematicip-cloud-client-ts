@@ -1,5 +1,10 @@
 # homematicip-cloud-client-ts
 
+[![npm](https://img.shields.io/npm/v/homematicip-cloud-client-ts.svg?style=plastic)](https://www.npmjs.com/package/homematicip-cloud-client-ts)
+[![npm](https://img.shields.io/npm/dt/homematicip-cloud-client-ts.svg?style=plastic)](https://www.npmjs.com/package/homematicip-cloud-client-ts)
+[![GitHub last commit](https://img.shields.io/github/last-commit/marcsowen/homematicip-cloud-client-ts.svg?style=plastic)](https://github.com/marcsowen/homematicip-cloud-client-ts)
+![GitHub build](https://img.shields.io/github/actions/workflow/status/marcsowen/homematicip-cloud-client-ts/main.yml?style=plastic)
+
 Unofficial TypeScript and JavaScript client for the Homematic IP Cloud REST and WebSocket APIs used by the Homematic IP Access Point.
 
 > This project is not affiliated with or endorsed by eQ-3 AG. The cloud API is unofficial and may change without notice.
