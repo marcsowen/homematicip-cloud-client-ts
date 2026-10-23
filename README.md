@@ -44,12 +44,32 @@ process.once('SIGTERM', () => client.shutdown());
 
 The package includes strict TypeScript definitions and runtime validation for complete home-state responses and WebSocket change events.
 
+### Connection lifecycle
+
+`connect(onStateChange, onConnectionEvent?)` accepts an optional second callback.
+The callback receives `connected` on the first successful WebSocket connection, `disconnected` when a connection is lost
+(or an attempt fails), and `reconnected` on subsequent successful connections. An explicit disconnect/shutdown reports
+`disconnected` only when connected; stale socket events and repeated shutdown calls produce no notifications.
+Callbacks run synchronously. Exceptions are logged without their contents and do not stop reconnection; applications
+should catch failures in any asynchronous work they start. Fetch a fresh snapshot on connection/reconnection to recover
+missed updates. A transport connection does not itself guarantee that a snapshot is available.
+
+```ts
+client.connect(onStateChange, event => {
+  if (event === 'disconnected') markDevicesUnreachable();
+  else void refreshState().catch(reportRefreshFailure);
+});
+```
+
 ### Validation diagnostics
 
 Invalid home-state and WebSocket payloads are logged with the failing field and a diagnostic snapshot of only the
 rejected object. Diagnostics are limited to 4,000 characters and redact credentials, PINs, controller and device
 identifiers, serialized trade numbers, groups, and user-defined labels. Review diagnostic output before sharing it in a
 public issue because the unofficial API may add fields that the client does not know are sensitive yet.
+
+Successful HTTP response bodies are omitted from debug logs, including pairing responses. Malformed JSON error logs
+omit parser messages that could contain payload fragments. Structured validation diagnostics retain their existing redaction.
 
 ## Authentication
 
@@ -76,24 +96,3 @@ five minutes to complete registration. The remaining pairing operations are the 
 ## License
 
 Apache-2.0
-
-
-### Connection lifecycle
-
-`connect(onStateChange, onConnectionEvent?)` accepts an optional second callback.
-The callback receives `connected` on the first successful WebSocket connection, `disconnected` when a connection is lost
-(or an attempt fails), and `reconnected` on subsequent successful connections. An explicit disconnect/shutdown reports
-`disconnected` only when connected; stale socket events and repeated shutdown calls produce no notifications.
-Callbacks run synchronously. Exceptions are logged without their contents and do not stop reconnection; applications
-should catch failures in any asynchronous work they start. Fetch a fresh snapshot on connection/reconnection to recover
-missed updates. A transport connection does not itself guarantee that a snapshot is available.
-
-```ts
-client.connect(onStateChange, event => {
-  if (event === 'disconnected') markDevicesUnreachable();
-  else void refreshState().catch(reportRefreshFailure);
-});
-```
-
-Successful HTTP response bodies are omitted from debug logs, including pairing responses. Malformed JSON error logs
-omit parser messages that could contain payload fragments. Structured validation diagnostics retain their existing redaction.
