@@ -159,3 +159,27 @@ test('command rejects unsuccessful API calls', async () => {
   );
   client.shutdown();
 });
+
+
+test('public connect forwards lifecycle callbacks while legacy listeners remain valid', async () => {
+  const {log} = createLog();
+  let socket;
+  const events = [];
+  const client = new HmIPClient(log, {accessPoint: '3014-1234'}, {
+    fetch: async () => new Response(JSON.stringify(endpoints), {headers: {'content-type': 'application/json'}}),
+    webSocket: {createWebSocket: () => {
+      socket = new EventEmitter();
+      socket.close = () => socket.emit('close');
+      return socket;
+    }},
+  });
+  try {
+    await client.init();
+    client.connect(() => {}, event => events.push(event));
+    socket.emit('open');
+    client.disconnect();
+    client.connect(() => {});
+    socket.emit('open');
+    assert.deepEqual(events, ['connected', 'disconnected']);
+  } finally {client.shutdown();}
+});

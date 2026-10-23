@@ -147,13 +147,14 @@ export class HmIPHttpClient {
     if (response.headers.get('content-type')?.includes('application/json')) {
       try {
         const json: unknown = await response.json();
-        this.log.debug('API response %d %s: %s', response.status, response.statusText, JSON.stringify(json));
+        // Never log response bodies: pairing tokens and home data may appear at any depth.
+        this.log.debug('API response %d %s: JSON body omitted', response.status, response.statusText);
         return {ok: true, body: json};
       } catch (error) {
         const failure = HmIPHttpClient.failure(
           path,
           'invalid-json',
-          `invalid JSON response: ${HmIPHttpClient.errorMessage(error)}`,
+          `invalid JSON response: ${error instanceof Error ? error.name : 'parse error'}`,
         );
         this.logFailure(failure, logError);
         return failure;

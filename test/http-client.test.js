@@ -74,3 +74,30 @@ test('shutdown aborts an active request', async () => {
   assert.equal((await request).error.kind, 'aborted');
   assert.equal((await client.request('after-shutdown')).error.kind, 'aborted');
 });
+
+
+test('debug logs omit response bodies without changing returned data', async () => {
+  const messages = [];
+  const body = {authToken: 'secret-token', nested: {pin: 'secret-pin', label: 'private-room'}};
+  const client = new HmIPHttpClient({...log, debug: (...args) => messages.push(args)}, new URL('https://rest.example/'), credentials, {
+    fetch: async () => new Response(JSON.stringify(body), {headers: {'content-type': 'application/json'}}),
+  });
+  try {
+    assert.deepEqual((await client.request('auth/requestAuthToken')).body, body);
+    const output = JSON.stringify(messages);
+    for (const secret of ['secret-token', 'secret-pin', 'private-room']) assert.equal(output.includes(secret), false);
+    assert.ok(output.includes('JSON body omitted'));
+  } finally { client.shutdown(); }
+});
+
+test('malformed JSON errors do not disclose response fragments', async () => {
+  const messages = [];
+  const client = new HmIPHttpClient({...log, error: (...args) => messages.push(args)}, new URL('https://rest.example/'), credentials, {
+    fetch: async () => new Response('secret-token-not-json', {headers: {'content-type': 'application/json'}}),
+  });
+  try {
+    const result = await client.request('auth/requestAuthToken');
+    assert.equal(result.error.kind, 'invalid-json');
+    assert.equal(JSON.stringify([result, messages]).includes('secret-token-not-json'), false);
+  } finally { client.shutdown(); }
+});

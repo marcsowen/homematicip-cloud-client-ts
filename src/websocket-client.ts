@@ -5,6 +5,9 @@ const PING_INTERVAL_MILLIS = 5000;
 const RECONNECT_BASE_MILLIS = 10000;
 const RECONNECT_MAX_MILLIS = 60000;
 
+export type HmIPConnectionEvent = 'connected' | 'disconnected' | 'reconnected';
+export type HmIPConnectionListener = (event: HmIPConnectionEvent) => void;
+
 type WebSocketState = 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'stopped';
 
 export interface HmIPWebSocketOptions {
@@ -30,6 +33,8 @@ export class HmIPWebSocketClient {
   private state: WebSocketState = 'disconnected';
   private generation = 0;
   private alive = false;
+  private hasConnected = false;
+  private connectionListener: HmIPConnectionListener | undefined;
   private reconnectAttempt = 0;
   private listener: ((data: RawData) => void) | undefined;
   private pingIntervalId: ReturnType<typeof setInterval> | undefined;
@@ -52,12 +57,13 @@ export class HmIPWebSocketClient {
     this.clearTimeoutImplementation = options.clearTimeout ?? globalThis.clearTimeout;
   }
 
-  public start(listener: (data: RawData) => void): void {
+  public start(listener: (data: RawData) => void, connectionListener?: HmIPConnectionListener): void {
     if (this.state !== 'disconnected') {
       this.log.debug('Ignoring websocket start while state is %s.', this.state);
       return;
     }
     this.listener = listener;
+    this.connectionListener = connectionListener;
     this.open();
   }
 
@@ -68,6 +74,7 @@ export class HmIPWebSocketClient {
     if (this.state !== 'disconnected') {
       this.log.info('HmIP websocket shutdown...');
     }
+    const wasConnected = this.state === 'connected';
     this.state = 'stopped';
     this.listener = undefined;
     this.reconnectAttempt = 0;
@@ -76,6 +83,8 @@ export class HmIPWebSocketClient {
     const socket = this.socket;
     this.socket = undefined;
     socket?.close();
+    if (wasConnected) this.notifyConnection('disconnected');
+    this.connectionListener = undefined;
   }
 
   private open(): void {
@@ -93,6 +102,7 @@ export class HmIPWebSocketClient {
       this.log.error('Cannot create Homematic IP websocket: %s', HmIPWebSocketClient.errorMessage(error));
       this.state = 'disconnected';
       this.scheduleReconnect();
+      this.notifyConnection('disconnected');
       return;
     }
     this.socket = socket;
@@ -111,6 +121,9 @@ export class HmIPWebSocketClient {
       this.reconnectAttempt = 0;
       this.alive = true;
       this.startHeartbeat(socket, generation);
+      const event = this.hasConnected ? 'reconnected' : 'connected';
+      this.hasConnected = true;
+      this.notifyConnection(event);
     });
     socket.on('pong', () => {
       if (this.isCurrent(socket, generation)) {
@@ -149,6 +162,16 @@ export class HmIPWebSocketClient {
       socket.terminate();
     }
     this.scheduleReconnect();
+    this.notifyConnection('disconnected');
+  }
+
+  private notifyConnection(event: HmIPConnectionEvent): void {
+    try {
+      this.connectionListener?.(event);
+    } catch {
+      // Observer errors must not interrupt heartbeat/reconnection or leak consumer data.
+      this.log.error('Homematic IP connection listener failed.');
+    }
   }
 
   private startHeartbeat(socket: WebSocket, generation: number): void {

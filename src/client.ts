@@ -9,6 +9,7 @@ import {
   parseHmIPState,
   parseHmIPStateChange,
 } from './state.js';
+import type {HmIPConnectionListener} from './websocket-client.js';
 import {HmIPWebSocketClient, type HmIPWebSocketOptions} from './websocket-client.js';
 
 export type {HmIPWebSocketOptions as HmIPClientWebSocketOptions} from './websocket-client.js';
@@ -236,7 +237,7 @@ export class HmIPClient {
     return state.value;
   }
 
-  connect(listener: (stateChange: HmIPStateChange) => void): void {
+  connect(listener: (stateChange: HmIPStateChange) => void, connectionListener?: HmIPConnectionListener): void {
     if (this.shutdownController.signal.aborted) {
       return;
     }
@@ -262,7 +263,7 @@ export class HmIPClient {
         parsedMessage = JSON.parse(data.toString()) as unknown;
       } catch (error) {
         this.log.error('Cannot parse Homematic IP websocket message: %s',
-          error instanceof Error ? error.message : String(error));
+          error instanceof Error ? error.name : 'invalid JSON');
         return;
       }
       const parseResult = parseHmIPStateChange(parsedMessage);
@@ -273,7 +274,7 @@ export class HmIPClient {
         return;
       }
       listener(parseResult.value);
-    });
+    }, connectionListener);
   }
 
   disconnect(): void {

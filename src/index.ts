@@ -10,3 +10,5 @@ export {
 export type {HmIPHttpError, HmIPHttpErrorKind, HmIPHttpResult} from './http-client.js';
 export type {HmIPLogger} from './logger.js';
 export * from './state.js';
+
+export type {HmIPConnectionEvent, HmIPConnectionListener} from './websocket-client.js';

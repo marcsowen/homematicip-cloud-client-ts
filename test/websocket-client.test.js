@@ -76,3 +76,47 @@ test('heartbeat reconnects an unresponsive connection and stop clears timers', (
   assert.equal(harness.pending(harness.intervals).length, 0);
   assert.equal(harness.pending(harness.timeouts).length, 0);
 });
+
+
+test('lifecycle reports connection, outage and recovery without stale socket notifications', () => {
+  const h = createHarness();
+  const events = [];
+  const client = new HmIPWebSocketClient(log, 'wss://ws.example', {}, h.options);
+  client.start(() => {}, event => events.push(event));
+  const first = h.sockets[0];
+  first.emit('open');
+  first.emit('error', new Error('offline'));
+  first.emit('close');
+  h.timeouts[0].callback();
+  first.emit('open');
+  h.sockets[1].emit('open');
+  client.stop();
+  client.stop();
+  h.sockets[1].emit('open');
+  assert.deepEqual(events, ['connected', 'disconnected', 'reconnected', 'disconnected']);
+  assert.equal(h.pending(h.intervals).length, 0);
+});
+
+test('lifecycle observer exceptions do not break heartbeat or reconnect', () => {
+  const h = createHarness();
+  const errors = [];
+  const client = new HmIPWebSocketClient({...log, error: (...args) => errors.push(args)}, 'wss://ws.example', {}, h.options);
+  client.start(() => {}, () => { throw new Error('private observer data'); });
+  assert.doesNotThrow(() => h.sockets[0].emit('open'));
+  assert.equal(h.pending(h.intervals).length, 1);
+  assert.doesNotThrow(() => h.sockets[0].emit('close'));
+  assert.equal(h.pending(h.timeouts).length, 1);
+  assert.equal(JSON.stringify(errors).includes('private observer data'), false);
+  client.stop();
+});
+
+test('initial socket construction failure is observable and can be cancelled by observer', () => {
+  const h = createHarness();
+  const events = [];
+  const client = new HmIPWebSocketClient(log, 'wss://ws.example', {}, {
+    ...h.options, createWebSocket: () => {throw new Error('failed');},
+  });
+  client.start(() => {}, event => {events.push(event); client.stop();});
+  assert.deepEqual(events, ['disconnected']);
+  assert.equal(h.pending(h.timeouts).length, 0);
+});
