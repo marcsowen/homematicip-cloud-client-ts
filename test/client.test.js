@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {EventEmitter} from 'node:events';
 import test from 'node:test';
-import {HmIPClient} from '../dist/index.js';
+import {HmIPClient, HmIPClientError} from '../dist/index.js';
 
 function createLog() {
   const errors = [];
@@ -28,8 +28,8 @@ test('shares and caches endpoint initialization', async () => {
     },
   });
 
-  assert.deepEqual(await Promise.all([client.init(), client.init()]), [true, true]);
-  assert.equal(await client.init(), true);
+  assert.deepEqual(await Promise.all([client.init(), client.init()]), [undefined, undefined]);
+  assert.equal(await client.init(), undefined);
   assert.equal(lookupCalls, 1);
   client.shutdown();
 });
@@ -42,7 +42,7 @@ test('validates endpoints and logs redacted current-state diagnostics', async ()
       urlWebSocket: 'https://ws.example',
     }), {headers: {'content-type': 'application/json'}, status: 200}),
   });
-  assert.equal(await invalidEndpoints.init(), false);
+  await assert.rejects(invalidEndpoints.init(), {kind: 'invalid-response'});
   invalidEndpoints.shutdown();
 
   let requests = 0;
@@ -67,8 +67,8 @@ test('validates endpoints and logs redacted current-state diagnostics', async ()
       });
     },
   });
-  assert.equal(await invalidState.init(), true);
-  assert.equal(await invalidState.getCurrentState(), false);
+  assert.equal(await invalidState.init(), undefined);
+  await assert.rejects(invalidState.getCurrentState(), {kind: 'invalid-response'});
   const diagnosticLog = errors.at(-1).join(' ');
   assert.match(diagnosticLog, /functionalChannels must be an object/);
   assert.match(diagnosticLog, /Redacted diagnostic/);
@@ -96,7 +96,7 @@ test('connect emits typed events and ignores malformed messages', async () => {
       return socket;
     }},
   });
-  assert.equal(await client.init(), true);
+  assert.equal(await client.init(), undefined);
 
   const changes = [];
   client.connect(change => changes.push(change));
@@ -131,7 +131,7 @@ test('includes the Access Point ID required for HCU pairing', async () => {
       return responses.shift();
     },
   });
-  assert.equal(await client.init(), true);
+  assert.equal(await client.init(), undefined);
 
   assert.equal(await client.authConnectionRequest('client-id'), true);
   assert.deepEqual(await client.authRequestAcknowledged('client-id'), {status: 'acknowledged'});
@@ -152,10 +152,10 @@ test('includes the Access Point ID required for HCU pairing', async () => {
 test('command rejects unsuccessful API calls', async () => {
   const {log} = createLog();
   const client = new HmIPClient(log, {accessPoint: '3014-1234', authToken: 'token'});
-  client.apiCall = async () => false;
+  client.apiCall = async () => { throw new HmIPClientError('http', 'device/control/test', 403); };
   await assert.rejects(
-    client.command('device/control/setSwitchState', {on: true}),
-    /Homematic IP command failed/,
+    client.command('setSwitchState', {on: true}),
+    {kind: 'http', status: 403},
   );
   client.shutdown();
 });
@@ -181,5 +181,51 @@ test('public connect forwards lifecycle callbacks while legacy listeners remain 
     client.connect(() => {});
     socket.emit('open');
     assert.deepEqual(events, ['connected', 'disconnected']);
+  } finally {client.shutdown();}
+});
+
+test('public requests preserve HTTP status, cancellation and explicit command rejection', async () => {
+  const {log} = createLog();
+  let mode = 'forbidden';
+  const client = new HmIPClient(log, {accessPoint: '30141234', authToken: 'secret'}, {
+    fetch: async (url, options) => {
+      if (String(url).includes('getHost')) return Response.json(endpoints);
+      if (mode === 'forbidden') return new Response('secret body', {status: 403});
+      if (mode === 'false') return Response.json(false);
+      options.signal.throwIfAborted();
+      return Response.json({});
+    },
+  });
+  await client.init();
+  await assert.rejects(client.getCurrentState(), e => e instanceof HmIPClientError && e.kind === 'http' && e.status === 403 && !e.message.includes('secret'));
+  mode = 'false';
+  await assert.rejects(client.command('setSwitchState', {deviceId: 'id', channelIndex: 1, on: true}), {kind: 'command-rejected'});
+  mode = 'ok';
+  await assert.rejects(client.command('stop', {deviceId: 'id', channelIndex: 1}, {signal: AbortSignal.abort()}), {kind: 'aborted'});
+  client.shutdown();
+});
+
+test('named commands route internally and preserve payloads and request options', async () => {
+  const {log} = createLog();
+  const client = new HmIPClient(log, {accessPoint: '30141234'});
+  const calls = [];
+  client.apiCall = async (...args) => { calls.push(args); };
+  const address = {deviceId: 'device', channelIndex: 1};
+  const options = {priority: 2, signal: new AbortController().signal};
+  try {
+    await client.command('setSwitchState', {...address, on: true}, options);
+    await client.deviceCommand('setDimLevel', address, {dimLevel: 0.5}, options);
+    await client.command('setHeatingControlMode', {groupId: 'group', controlMode: 'MANUAL'});
+    await client.command('setHeatingSetPointTemperature', {groupId: 'group', setPointTemperature: 21});
+    await client.command('setSecurityZonesActivation', {zonesActivation: {EXTERNAL: true}});
+    assert.deepEqual(calls, [
+      ['device/control/setSwitchState', {...address, on: true}, options],
+      ['device/control/setDimLevel', {...address, dimLevel: 0.5}, options],
+      ['group/heating/setControlMode', {groupId: 'group', controlMode: 'MANUAL'}, {}],
+      ['group/heating/setSetPointTemperature', {groupId: 'group', setPointTemperature: 21}, {}],
+      ['home/security/setZonesActivation', {zonesActivation: {EXTERNAL: true}}, {}],
+    ]);
+    await assert.rejects(client.command('unknown', {}), TypeError);
+    assert.equal(calls.length, 5);
   } finally {client.shutdown();}
 });

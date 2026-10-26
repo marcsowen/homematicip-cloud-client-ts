@@ -79,9 +79,9 @@ export interface HmIPSecurityAndAlarmSolution extends HmIPFunctionalHome {
 }
 
 export interface HmIPState {
-  devices: Record<string, HmIPDevice>;
-  groups: Record<string, HmIPGroup>;
-  home: HmIPHome;
+  readonly devices: Readonly<Record<string, HmIPDevice>>;
+  readonly groups: Readonly<Record<string, HmIPGroup>>;
+  readonly home: HmIPHome;
 }
 
 export interface SabotageChannel {

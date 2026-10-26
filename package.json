@@ -1,6 +1,6 @@
 {
   "name": "homematicip-cloud-client-ts",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Unofficial TypeScript and JavaScript client for the Homematic IP Cloud REST and WebSocket APIs",
   "license": "Apache-2.0",
   "author": "Marc Sowen <marc@sowen.net>",
@@ -41,12 +41,13 @@
   "packageManager": "pnpm@11.18.0",
   "scripts": {
     "lint": "biome check src",
-    "test": "pnpm run build && node --test test/*.test.js",
+    "test": "pnpm run build && pnpm run test:types && node --test test/*.test.js",
+    "test:types": "tsc --ignoreConfig --noEmit --strict --skipLibCheck --module NodeNext --target ES2024 test/commands.types.ts",
     "build": "rimraf ./dist && tsc",
     "prepublishOnly": "pnpm run lint && pnpm run test"
   },
   "engines": {
-    "node": "^22.0.0 || ^24.0.0"
+    "node": "^24.0.0 || ^26.0.0"
   },
   "dependencies": {
     "p-queue": "^9.3.3",

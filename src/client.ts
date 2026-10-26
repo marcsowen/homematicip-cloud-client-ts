@@ -1,6 +1,8 @@
 import * as crypto from 'node:crypto';
 import {createRequire} from 'node:module';
 import * as os from 'node:os';
+import type {HmIPCommandBodies, HmIPDeviceAddress, HmIPDeviceCommandBodies, HmIPRequestOptions} from './commands.js';
+import {HmIPClientError} from './errors.js';
 import {HmIPHttpClient, type HmIPHttpError, type HmIPHttpResult} from './http-client.js';
 import type {HmIPLogger} from './logger.js';
 import {
@@ -72,6 +74,28 @@ function parseEndpoint(value: string, protocols: ReadonlySet<string>): URL | und
   }
 }
 
+const COMMAND_PATHS: Record<keyof HmIPCommandBodies, string> = {
+  setSwitchState: 'device/control/setSwitchState',
+  setDimLevel: 'device/control/setDimLevel',
+  setShutterLevel: 'device/control/setShutterLevel',
+  setPrimaryShadingLevel: 'device/control/setPrimaryShadingLevel',
+  setSlatsLevel: 'device/control/setSlatsLevel',
+  stop: 'device/control/stop',
+  startImpulse: 'device/control/startImpulse',
+  setLockState: 'device/control/setLockState',
+  sendDoorCommand: 'device/control/sendDoorCommand',
+  setWateringSwitchState: 'device/control/setWateringSwitchState',
+  setWateringSwitchStateWithTime: 'device/control/setWateringSwitchStateWithTime',
+  setWaterSupplyState: 'device/control/setWaterSupplyState',
+  setHueSaturationDimLevel: 'device/control/setHueSaturationDimLevel',
+  setColorTemperatureDimLevel: 'device/control/setColorTemperatureDimLevel',
+  setSimpleRGBColorDimLevel: 'device/control/setSimpleRGBColorDimLevel',
+  setOpticalSignal: 'device/control/setOpticalSignal',
+  setHeatingControlMode: 'group/heating/setControlMode',
+  setHeatingSetPointTemperature: 'group/heating/setSetPointTemperature',
+  setSecurityZonesActivation: 'home/security/setZonesActivation',
+};
+
 export class HmIPClient {
 
   private readonly accessPoint: string;
@@ -84,7 +108,7 @@ export class HmIPClient {
   private readonly fetchImplementation: typeof fetch;
   private readonly deviceName: string;
   private endpoints: HmIPEndpoints | undefined;
-  private initialization: Promise<boolean> | undefined;
+  private initialization: Promise<void> | undefined;
   private readonly shutdownController = new AbortController();
 
   private httpClient: HmIPHttpClient | undefined;
@@ -134,19 +158,16 @@ export class HmIPClient {
     return Boolean(this.accessPoint);
   }
 
-  async init(signal?: AbortSignal): Promise<boolean> {
+  async init(signal?: AbortSignal): Promise<void> {
     if (this.shutdownController.signal.aborted) {
-      return false;
+      throw new HmIPClientError('aborted', 'lookup/getHost');
     }
     if (this.endpoints) {
-      return true;
+      return;
     }
     if (!this.initialization) {
       this.initialization = this.lookupEndpoints(signal)
         .then(endpoints => {
-          if (endpoints === false) {
-            return false;
-          }
           this.endpoints = endpoints;
           this.httpClient = new HmIPHttpClient(
             this.log,
@@ -159,7 +180,6 @@ export class HmIPClient {
             },
             {fetch: this.fetchImplementation},
           );
-          return true;
         })
         .finally(() => {
           this.initialization = undefined;
@@ -168,7 +188,7 @@ export class HmIPClient {
     return this.initialization;
   }
 
-  private async lookupEndpoints(signal?: AbortSignal): Promise<HmIPEndpoints | false> {
+  private async lookupEndpoints(signal?: AbortSignal): Promise<HmIPEndpoints> {
     const headers = {
       'Content-Type': 'application/json',
       'Accept': 'application/json',
@@ -176,63 +196,63 @@ export class HmIPClient {
       'AUTHTOKEN': '',
       'CLIENTAUTH': this.clientAuthToken,
     };
+    const requestSignal = this.createRequestSignal(signal);
     try {
       const response = await this.fetchImplementation('https://lookup.homematic.com:48335/getHost', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(this.clientCharacteristics),
-        signal: this.createRequestSignal(signal),
+        method: 'POST', headers, body: JSON.stringify(this.clientCharacteristics), signal: requestSignal,
       });
-      if (!response.ok) {
-        this.log.error('Cannot look up Homematic IP endpoint: HTTP %d %s', response.status, response.statusText);
-        return false;
-      }
-      const result: unknown = await response.json();
+      if (!response.ok) throw new HmIPClientError('http', 'lookup/getHost', response.status);
+      let result: unknown;
+      try { result = await response.json(); }
+      catch { throw new HmIPClientError('invalid-json', 'lookup/getHost'); }
       if (!isRecord(result) || typeof result.urlREST !== 'string' || typeof result.urlWebSocket !== 'string') {
-        this.log.error('Cannot look up Homematic IP endpoint: response has an invalid shape');
-        return false;
+        throw new HmIPClientError('invalid-response', 'lookup/getHost');
       }
       const rest = parseEndpoint(result.urlREST, REST_PROTOCOLS);
       const webSocket = parseEndpoint(result.urlWebSocket, WEBSOCKET_PROTOCOLS);
-      if (!rest || !webSocket) {
-        this.log.error('Cannot look up Homematic IP endpoint: response contains invalid endpoint URLs');
-        return false;
-      }
+      if (!rest || !webSocket) throw new HmIPClientError('invalid-response', 'lookup/getHost');
+      requestSignal.throwIfAborted();
       return {rest, webSocket};
     } catch (error) {
-      if (!this.shutdownController.signal.aborted && !signal?.aborted) {
-        this.log.error('Cannot look up Homematic IP endpoint: %s', HmIPClient.errorMessage(error));
-      }
-      return false;
+      if (requestSignal.aborted) throw new HmIPClientError(
+        this.shutdownController.signal.aborted || signal?.aborted ? 'aborted' : 'timeout', 'lookup/getHost');
+      throw error instanceof HmIPClientError ? error : new HmIPClientError('network', 'lookup/getHost');
     }
   }
 
-  async apiCall(path: string, body?: Record<string, unknown>, priority = 5,
-    signal?: AbortSignal): Promise<unknown | false> {
-    const result = await this.request(true, true, path, body, priority, signal);
-    return result.ok ? result.body : false;
+  /** Low-level escape hatch for cloud operations not yet covered by command(). */
+  async apiCall(path: string, body?: Record<string, unknown>, options: HmIPRequestOptions = {}): Promise<unknown> {
+    const result = await this.request(true, false, path, body, options.priority ?? 5, options.signal);
+    if (!result.ok) throw HmIPClientError.fromHttp(result.error);
+    return result.body;
   }
 
-  async command(path: string, body: Record<string, unknown>, priority = 5): Promise<void> {
-    const result = await this.apiCall(path, body, priority);
-    if (result === false) {
-      throw new Error(`Homematic IP command failed: ${path}`);
-    }
+  async command<K extends keyof HmIPCommandBodies>(operation: K, body: HmIPCommandBodies[NoInfer<K>],
+    options: HmIPRequestOptions = {}): Promise<void> {
+    await this.executeCommand(operation, {...body}, options);
   }
 
-  async getCurrentState(signal?: AbortSignal): Promise<HmIPState | false> {
-    const result = await this.request(true, true, 'home/getCurrentState',
-      this.clientCharacteristics, 1, signal);
-    if (!result.ok) {
-      return false;
-    }
-    const state = parseHmIPState(result.body);
+  /** Device-scoped commands let adapters keep the address separate from the operation payload. */
+  async deviceCommand<K extends keyof HmIPDeviceCommandBodies>(operation: K, address: HmIPDeviceAddress,
+    body: HmIPDeviceCommandBodies[NoInfer<K>], options: HmIPRequestOptions = {}): Promise<void> {
+    await this.executeCommand(operation, {...body, ...address}, options);
+  }
+
+  private async executeCommand(operation: keyof HmIPCommandBodies, body: Record<string, unknown>,
+    options: HmIPRequestOptions): Promise<void> {
+    const path = COMMAND_PATHS[operation];
+    if (!path) throw new TypeError('Unknown Homematic IP command operation.');
+    const response = await this.apiCall(path, body, options);
+    if (response === false) throw new HmIPClientError('command-rejected', path);
+  }
+
+  async getCurrentState(signal?: AbortSignal): Promise<HmIPState> {
+    const body = await this.apiCall('home/getCurrentState', this.clientCharacteristics, {priority: 1, ...(signal ? {signal} : {})});
+    const state = parseHmIPState(body);
     if (!state.success) {
-      if (result.body !== false) {
-        this.log.error('Homematic IP returned an invalid home state response: %s.%s',
-          state.error, state.diagnostic ? ` Redacted diagnostic: ${state.diagnostic}` : '');
-      }
-      return false;
+      this.log.error('Homematic IP returned an invalid home state response: %s.%s',
+        state.error, state.diagnostic ? ` Redacted diagnostic: ${state.diagnostic}` : '');
+      throw new HmIPClientError('invalid-response', 'home/getCurrentState');
     }
     return state.value;
   }
@@ -242,8 +262,7 @@ export class HmIPClient {
       return;
     }
     if (!this.endpoints) {
-      this.log.error('Cannot connect Homematic IP websocket before client initialization.');
-      return;
+      throw new HmIPClientError('not-initialized', 'websocket/connect');
     }
     if (!this.webSocketClient) {
       this.webSocketClient = new HmIPWebSocketClient(
@@ -339,10 +358,6 @@ export class HmIPClient {
     return result.ok && isRecord(result.body) && typeof result.body.clientId === 'string'
       ? {clientId: result.body.clientId}
       : false;
-  }
-
-  private static errorMessage(error: unknown): string {
-    return error instanceof Error ? error.message : String(error);
   }
 
   private request(authenticated: boolean, logError: boolean, path: string,
