@@ -40,11 +40,12 @@
   "sideEffects": false,
   "packageManager": "pnpm@11.18.0",
   "scripts": {
-    "lint": "biome check src",
+    "lint": "biome check src test",
     "test": "pnpm run build && pnpm run test:types && node --test test/*.test.js",
     "test:types": "tsc --ignoreConfig --noEmit --strict --skipLibCheck --module NodeNext --target ES2024 test/commands.types.ts",
     "build": "rimraf ./dist && tsc",
-    "prepublishOnly": "pnpm run lint && pnpm run test"
+    "prepublishOnly": "pnpm run lint && pnpm run test",
+    "format": "biome check --write src test"
   },
   "engines": {
     "node": "^24.0.0 || ^26.0.0"
@@ -54,7 +55,7 @@
     "ws": "^8.21.1"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.6",
+    "@biomejs/biome": "^2.6.2",
     "@types/node": "^24.10.1",
     "@types/ws": "^8.18.1",
     "rimraf": "^6.1.3",
